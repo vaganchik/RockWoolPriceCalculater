@@ -14,3 +14,8 @@ htmlcov/
 .venv/
 venv/
 env/
+
+# Local/project artifacts
+GEMINI.md
+AGENTS.md
+*.xlsx
