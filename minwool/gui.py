@@ -81,8 +81,10 @@ class MinwoolGUI:
         self.engine = MinwoolEngine()
         self.output_adapter = output_adapter or TkOutputAdapter()
         self.entries = {}
+        self.var_entries = {}
         self.last_results = None
         self.total_fixed_cost_var = tk.StringVar()
+        self.total_variable_cost_var = tk.StringVar()
         self._init_constants()
         self._setup_ui()
 
@@ -118,11 +120,11 @@ class MinwoolGUI:
         # Группировка полей для логического разделения в интерфейсе (Grid Layout)
         self.groups = {
             "Производительность": ['throughput_t_h', 'yield_rate'],
-            "Переменные затраты (тонна)": ['var_stone_t', 'var_melting_energy_t', 'var_other_t'],
             "Параметры связующего": ['loi_percent', 'resin_solid_content', 'resin_efficiency', 'resin_price_per_ton'],
             "Геометрия плиты": ['slab_length_mm', 'slab_width_mm', 'slab_thickness_mm', 'target_pack_height_mm'],
             "Упаковка и логистика": ['target_pallet_height_mm', 'pallet_length_mm', 'pallet_width_mm', 'max_pack_weight_kg', 'film_price_per_lm', 'film_width_m', 'pallet_price', 'hood_price', 'stretch_price_pallet', 'pallets_per_truck']
         }
+        self.variable_cost_keys = ['var_stone_t', 'var_melting_energy_t', 'var_other_t']
 
         # Определение колонок таблицы результатов: ID -> (Заголовок, Ширина)
         self.tree_cols = {
@@ -146,6 +148,8 @@ class MinwoolGUI:
             'pkg_pack': ("Упак. пачки", 80),
             'pkg_pal': ("Упак. паллет", 90),
             'pkg_m3': ("Упак/м3", 80),
+            'pal_cost': ("Стоимость паллета", 120),
+            'truck_cost': ("Стоимость 1 фуры", 130),
             'price': ("Цена пачки", 90)
         }
 
@@ -158,18 +162,23 @@ class MinwoolGUI:
         calc_tab = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(calc_tab, text="Калькулятор")
         self._init_calculator_tab(calc_tab)
-        
-        # Вкладка 2: Постоянные затраты (новая)
+
+        # Вкладка 2: Переменные затраты
+        var_tab = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(var_tab, text="Переменные затраты")
+        self._init_variable_costs_tab(var_tab)
+
+        # Вкладка 3: Постоянные затраты
         fixed_tab = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(fixed_tab, text="Постоянные затраты")
         self._init_fixed_costs_tab(fixed_tab)
 
-        # Вкладка 2: Настройка пачек
+        # Вкладка 4: Настройка пачек
         pack_tab = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(pack_tab, text="Настройка пачек")
         self.setup_pack_tab(pack_tab)
 
-        # Вкладка 3: Проверка расчетов
+        # Вкладка 5: Проверка расчетов
         debug_tab = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(debug_tab, text="Проверка расчетов")
         self._init_debug_tab(debug_tab)
@@ -195,6 +204,14 @@ class MinwoolGUI:
         fc_entry = ttk.Entry(fc_frame, textvariable=self.total_fixed_cost_var, state="readonly", width=15)
         fc_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=2, padx=(10, 0))
         ToolTip(fc_entry, "Сумма всех статей из вкладки 'Постоянные затраты'")
+
+        vc_frame = ttk.LabelFrame(container, text="Переменные затраты (Итого)", padding="10")
+        vc_frame.grid(row=2, column=0, sticky=(tk.N, tk.S, tk.E, tk.W), padx=5, pady=5)
+
+        ttk.Label(vc_frame, text="Сумма (руб/т):").grid(row=0, column=0, sticky=tk.W, pady=2)
+        vc_entry = ttk.Entry(vc_frame, textvariable=self.total_variable_cost_var, state="readonly", width=15)
+        vc_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=2, padx=(10, 0))
+        ToolTip(vc_entry, "Сумма всех статей из вкладки 'Переменные затраты'")
 
         # Блок предварительного просмотра результатов
         result_frame = ttk.LabelFrame(container, text="Результаты расчета (предпросмотр)", padding="10")
@@ -258,6 +275,64 @@ class MinwoolGUI:
                 entry.grid(row=i, column=1, sticky=(tk.W, tk.E), pady=2, padx=(10, 0))
                 ToolTip(entry, help_text)
                 self.entries[key] = entry
+
+    def _init_variable_costs_tab(self, parent: ttk.Frame):
+        """Инициализация вкладки управления переменными затратами."""
+        frame = ttk.Frame(parent)
+        frame.pack(fill='both', expand=True)
+
+        form = ttk.LabelFrame(frame, text="Переменные затраты на 1 тонну", padding="10")
+        form.pack(fill='x', padx=5, pady=5)
+        form.columnconfigure(1, weight=1)
+
+        self.var_total_var = tk.StringVar()
+        for i, key in enumerate(self.variable_cost_keys):
+            label_text, help_text = self.labels_map.get(key, (key, ""))
+            lbl = ttk.Label(form, text=f"{label_text}:")
+            lbl.grid(row=i, column=0, sticky=tk.W, pady=4, padx=(0, 10))
+            ToolTip(lbl, help_text)
+
+            entry = ttk.Entry(form, width=20)
+            entry.insert(0, str(self.engine.config[key]))
+            entry.grid(row=i, column=1, sticky=(tk.W, tk.E), pady=4)
+            ToolTip(entry, help_text)
+            entry.bind("<KeyRelease>", lambda _e: self._update_variable_totals_preview())
+            self.var_entries[key] = entry
+
+        total_frame = ttk.Frame(frame)
+        total_frame.pack(fill='x', padx=5, pady=(10, 0))
+        ttk.Label(total_frame, text="Итого переменных (руб/т):", font=('Segoe UI', 10, 'bold')).pack(side=tk.LEFT)
+        ttk.Label(total_frame, textvariable=self.var_total_var, font=('Segoe UI', 10, 'bold')).pack(side=tk.LEFT, padx=8)
+
+        actions = ttk.Frame(frame)
+        actions.pack(fill='x', padx=5, pady=(10, 0))
+        ttk.Button(actions, text="Применить", command=self._apply_variable_costs_from_ui).pack(side=tk.LEFT)
+
+        self._update_variable_totals_preview()
+
+    def _update_variable_totals_preview(self):
+        total = 0.0
+        for key in self.variable_cost_keys:
+            raw = self.var_entries[key].get().replace(',', '.')
+            try:
+                total += float(raw)
+            except ValueError:
+                pass
+        self.var_total_var.set(f"{total:,.2f}")
+        self.total_variable_cost_var.set(f"{total:,.2f}")
+
+    def _apply_variable_costs_from_ui(self):
+        try:
+            self._save_variable_costs_from_ui()
+        except ValueError:
+            messagebox.showerror("Ошибка", "Переменные затраты должны быть числом.")
+
+    def _save_variable_costs_from_ui(self):
+        """Считывает переменные затраты из отдельной вкладки и сохраняет в конфиг."""
+        for key in self.variable_cost_keys:
+            raw = self.var_entries[key].get().replace(',', '.')
+            self.engine.config[key] = float(raw)
+        self._update_variable_totals_preview()
 
     def _init_fixed_costs_tab(self, parent: ttk.Frame):
         """Инициализация вкладки управления постоянными затратами."""
@@ -526,13 +601,19 @@ class MinwoolGUI:
         
         # Расчеты, зависящие от плотности
         cost_wool_m3 = 0
+        wool_pallet_cost = 0
+        total_pallet_cost_with_pkg = 0
+        truck_cost = 0
         total_m3 = 0
         w_pack = 0
         w_pal = 0
         
         if density:
             cost_wool_m3 = ctx['cost_t'] * density / 1000
-            total_m3 = cost_wool_m3 + cost_pkg_m3
+            wool_pallet_cost = cost_wool_m3 * v_pal
+            total_pallet_cost_with_pkg = wool_pallet_cost + pkg['total_pallet_cost_rub']
+            truck_cost = total_pallet_cost_with_pkg * ctx['pals_truck']
+            total_m3 = total_pallet_cost_with_pkg / v_pal if v_pal > 0 else 0
             w_pack = v_pack * density
             w_pal = w_pack * pks_pal
         
@@ -559,8 +640,8 @@ class MinwoolGUI:
             },
             'm3_yes': {
                 'desc': "Полная себестоимость одного кубического метра (вата + упаковка).",
-                'gen': "С/С_1м3_без_упак + С/С_упаковки_м3",
-                'sub': f"{round(cost_wool_m3, 2) if density else 'С/С_1м3_без_упак'} + {round(cost_pkg_m3, 2)} = {round(total_m3, 2) if density else '...'}"
+                'gen': "Стоимость_1_паллета_с_упаковкой / Объем_1_паллета",
+                'sub': f"{round(total_pallet_cost_with_pkg, 2) if density else 'Стоимость_паллета_с_упаковкой'} / {v_pal:.4f} = {round(total_m3, 2) if density else '...'}"
             },
             'n': {
                 'desc': "Количество плит в одной упаковке.",
@@ -597,7 +678,7 @@ class MinwoolGUI:
                 'gen': "Вес_пачки * Пачек_на_поддоне (динамически)", 
                 'sub': f"{round(w_pack, 2) if density else 'W_пачки'} * {pks_pal} = {round(w_pal, 2) if density else '...'}"
             },
-            'v_pal': { 'desc': "Объем продукции на одном поддоне.", 'gen': "Объем_пачки * Пачек_на_поддоне", 'sub': f"{v_pack:.4f} * {pks_pal} = {round(v_pack * pks_pal, 2)}" },
+            'v_pal': { 'desc': "Объем продукции на одном поддоне.", 'gen': "Объем_пачки * Пачек_на_поддоне", 'sub': f"{v_pack:.4f} * {pks_pal} = {round(v_pack * pks_pal, 4)}" },
             'w_truck': { 'desc': "Вес продукции в одной фуре.", 'gen': "Вес_поддона * Паллет_в_фуре", 'sub': f"{round(w_pal, 2) if density else 'W_поддона'} * {ctx['pals_truck']} = {round(w_pal * ctx['pals_truck'], 2) if density else '...'}" },
             'v_truck': { 'desc': "Объем продукции в одной фуре.", 'gen': "V_поддона * Паллет_в_фуре", 'sub': f"{round(v_pack * pks_pal, 2)} * {ctx['pals_truck']} = {round(v_pack * pks_pal * ctx['pals_truck'], 2)}" },
             'pks_t': { 'desc': "Упаковок из 1т.", 'gen': "1000 / Вес_пачки", 'sub': f"1000 / {round(w_pack, 2) if density else 'W_пачки'} = {round(1000 / w_pack, 2) if density and w_pack > 0 else '...'}" },
@@ -605,6 +686,8 @@ class MinwoolGUI:
             'pkg_pack': { 'desc': "Стоимость упаковки одной пачки.", 'gen': "Стоимость_упак_паллета / Пачек_на_паллете", 'sub': f"{pkg['total_pallet_cost_rub']} / {pks_pal} = {pkg['total_pack_cost_rub']}" },
             'pkg_pal': { 'desc': "Стоимость упаковки всего паллета.", 'gen': "(Упак_пачки * Кол-во) + Худ + Стрейч", 'sub': f"({pkg['film_cost_rub']} * {pks_pal}) + {ctx['hood_price']} + {ctx['stretch_price_pallet']} = {pkg['total_pallet_cost_rub']}" },
             'pkg_m3': { 'desc': "Затраты на упаковку на 1 м3.", 'gen': "Стоимость_упак_паллета / Объем_паллета", 'sub': f"{pkg['total_pallet_cost_rub']} / {v_pal:.4f} = {round(cost_pkg_m3, 2)}" },
+            'pal_cost': { 'desc': "Полная стоимость одного паллета с упаковкой.", 'gen': "Стоимость_ваты_в_паллете + Стоимость_упак_паллета", 'sub': f"{round(wool_pallet_cost, 2) if density else 'Стоимость_ваты_в_паллете'} + {pkg['total_pallet_cost_rub']} = {round(total_pallet_cost_with_pkg, 2) if density else '...'}" },
+            'truck_cost': { 'desc': "Полная стоимость продукции в одной фуре.", 'gen': "Стоимость_паллета_с_упаковкой * Паллет_в_фуре", 'sub': f"{round(total_pallet_cost_with_pkg, 2) if density else 'Стоимость_паллета_с_упаковкой'} * {ctx['pals_truck']} = {round(truck_cost, 2) if density else '...'}" },
             'price': { 'desc': "Себестоимость одной пачки.", 'gen': "С/С_1м3_с_упак * Объем_пачки", 'sub': f"{round(total_m3, 2) if density else 'ИТОГО_м3'} * {v_pack:.4f} = {round(total_m3 * v_pack, 2) if density else '...'}" }
         }
         
@@ -616,10 +699,11 @@ class MinwoolGUI:
         """Считывает данные из полей ввода, запускает расчет и обновляет таблицу."""
         try:
             # 1. Считывание конфигурации из UI
-            for key in self.engine.config:
-                val = self.entries[key].get().replace(',', '.')
+            for key, entry in self.entries.items():
+                val = entry.get().replace(',', '.')
                 # Целые числа для счетчиков
                 self.engine.config[key] = float(val) if '.' in val or key not in ['pallets_per_truck'] else int(val)
+            self._save_variable_costs_from_ui()
 
             # Обновляем настройки пачек через вспомогательный метод
             self.save_pack_settings_from_ui()

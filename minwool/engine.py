@@ -236,25 +236,105 @@ class MinwoolEngine:
         
         return best_n
 
+    def _calc_pack_height_mm(self, n_slabs: int) -> float:
+        """Высота пачки в мм."""
+        return n_slabs * self.config['slab_thickness_mm']
+
+    def _calc_pack_perimeter_m(self, h_pack_mm: float) -> float:
+        """Периметр поперечного сечения пачки в погонных метрах."""
+        return (2 * h_pack_mm + 2 * self.config['slab_width_mm']) / 1000
+
+    def _calc_film_cost_per_pack_rub(self, perimeter_m: float) -> float:
+        """Стоимость плёнки на одну пачку."""
+        return perimeter_m * self.config['film_price_per_lm']
+
+    def _calc_total_packaging_per_pallet_rub(self, film_cost_per_pack: float, packs_per_pallet: int) -> float:
+        """Стоимость упаковки паллета: плёнка пачек + худ + стрейч."""
+        c = self.config
+        return (film_cost_per_pack * packs_per_pallet) + c['hood_price'] + c['stretch_price_pallet']
+
+    def _calc_total_packaging_per_pack_rub(self, total_packaging_per_pallet: float, packs_per_pallet: int) -> float:
+        """Распределенная стоимость упаковки на одну пачку."""
+        return total_packaging_per_pallet / packs_per_pallet if packs_per_pallet > 0 else 0
+
+    def _calc_pack_volume_m3(self, h_pack_mm: float) -> float:
+        """Объем одной пачки в м3."""
+        c = self.config
+        return (c['slab_length_mm'] * c['slab_width_mm'] * h_pack_mm) / 1e9
+
+    def _calc_pallet_volume_m3(self, pack_volume_m3: float, packs_per_pallet: int) -> float:
+        """Объем продукции на паллете в м3."""
+        return pack_volume_m3 * packs_per_pallet
+
+    def _calc_wool_cost_m3(self, cost_t: float, density: float) -> float:
+        """Себестоимость ваты в 1 м3 без упаковки."""
+        return cost_t * density / 1000
+
+    def _calc_packaging_cost_m3(self, packaging_pallet_cost_rub: float, pallet_volume_m3: float) -> float:
+        """С/С упаковки в 1 м3."""
+        return packaging_pallet_cost_rub / pallet_volume_m3 if pallet_volume_m3 > 0 else 0
+
+    def _calc_wool_pallet_cost_rub(self, wool_cost_m3: float, pallet_volume_m3: float) -> float:
+        """Стоимость ваты в одном паллете."""
+        return wool_cost_m3 * pallet_volume_m3
+
+    def _calc_total_pallet_cost_with_packaging_rub(self, wool_pallet_cost_rub: float, packaging_pallet_cost_rub: float) -> float:
+        """Полная стоимость паллета с упаковкой."""
+        return wool_pallet_cost_rub + packaging_pallet_cost_rub
+
+    def _calc_total_cost_m3(self, total_pallet_cost_with_packaging_rub: float, pallet_volume_m3: float) -> float:
+        """С/С 1м3 с упаковкой."""
+        return total_pallet_cost_with_packaging_rub / pallet_volume_m3 if pallet_volume_m3 > 0 else 0
+
+    def _calc_total_cost_t_with_packaging(self, total_cost_m3: float, density: float) -> float:
+        """С/С 1т с упаковкой."""
+        return total_cost_m3 / (density / 1000) if density > 0 else 0
+
+    def _calc_pack_weight_kg(self, pack_volume_m3: float, density: float) -> float:
+        """Вес пачки в кг."""
+        return pack_volume_m3 * density
+
+    def _calc_pallet_weight_kg(self, pack_weight_kg: float, packs_per_pallet: int) -> float:
+        """Вес продукции на паллете в кг."""
+        return pack_weight_kg * packs_per_pallet
+
+    def _calc_truck_weight_kg(self, pallet_weight_kg: float) -> float:
+        """Вес продукции в фуре в кг."""
+        return pallet_weight_kg * self.config['pallets_per_truck']
+
+    def _calc_truck_volume_m3(self, pallet_volume_m3: float) -> float:
+        """Объем продукции в фуре в м3."""
+        return pallet_volume_m3 * self.config['pallets_per_truck']
+
+    def _calc_truck_cost_rub(self, pallet_cost_rub: float) -> float:
+        """Полная стоимость продукции в фуре."""
+        return pallet_cost_rub * self.config['pallets_per_truck']
+
+    def _calc_real_pallet_height_mm(self, pack_height_mm: float) -> float:
+        """Реальная высота паллета (продукт) в мм."""
+        layers = int(self.config['target_pallet_height_mm'] // pack_height_mm) if pack_height_mm > 0 else 0
+        return layers * pack_height_mm
+
+    def _calc_units_per_ton(self, unit_weight_kg: float) -> float:
+        """Количество единиц (пачек/паллета) в 1 тонне."""
+        return 1000 / unit_weight_kg if unit_weight_kg > 0 else 0
+
+    def _calc_pack_price_rub(self, total_cost_m3: float, pack_volume_m3: float) -> float:
+        """Себестоимость одной пачки."""
+        return total_cost_m3 * pack_volume_m3
+
     def calc_packaging_per_pack(self, n_slabs: int, packs_per_pallet: int) -> Dict[str, float]:
         """
-        Расчет затрат на упаковку одной пачки (пленка, доля поддона и чехла).
+        Расчет затрат на упаковку одной пачки (пленка, худ и стрейч).
         Возвращает словарь с геометрическими параметрами и стоимостью компонентов.
         """
-        c = self.config
-        h_pack = n_slabs * c['slab_thickness_mm']
-        
-        # 1. Стоимость упаковки одной пачки: (2*высота + 2*ширина) * цена_п.м.
-        perimeter_m = (2 * h_pack + 2 * c['slab_width_mm']) / 1000
-        pack_cost = perimeter_m * c['film_price_per_lm']
-        
-        # 2. Стоимость упаковки паллета: стоимость_пачки * кол-во + худ + стрейч
-        total_pallet_cost = (pack_cost * packs_per_pallet) + c['hood_price'] + c['stretch_price_pallet']
-        
-        # 2. Стоимость упаковки одной пачки (распределенная)
-        total_pack_cost = total_pallet_cost / packs_per_pallet if packs_per_pallet > 0 else 0
-        
-        pack_vol_m3 = (c['slab_length_mm'] * c['slab_width_mm'] * h_pack) / 1e9
+        h_pack = self._calc_pack_height_mm(n_slabs)
+        perimeter_m = self._calc_pack_perimeter_m(h_pack)
+        pack_cost = self._calc_film_cost_per_pack_rub(perimeter_m)
+        total_pallet_cost = self._calc_total_packaging_per_pallet_rub(pack_cost, packs_per_pallet)
+        total_pack_cost = self._calc_total_packaging_per_pack_rub(total_pallet_cost, packs_per_pallet)
+        pack_vol_m3 = self._calc_pack_volume_m3(h_pack)
+
         return {
             'n_slabs': n_slabs,
             'h_pack_mm': h_pack,
@@ -278,32 +358,35 @@ class MinwoolEngine:
             else:
                 n = self.optimize_pack(self.config['slab_thickness_mm'], rho)
             
-            h_pack_mm = n * self.config['slab_thickness_mm']
+            h_pack_mm = self._calc_pack_height_mm(n)
             pks_pal = self.calc_packs_on_pallet(h_pack_mm)
             pkg = self.calc_packaging_per_pack(n, pks_pal)
             
-            pallet_vol = pkg['vol_m3'] * pks_pal
+            pallet_vol = self._calc_pallet_volume_m3(pkg['vol_m3'], pks_pal)
             
             # Пересчет стоимости из тонн в кубические метры
-            cost_wool_m3 = cost_t * rho / 1000 # Перевод стоимости тонны в м3 через плотность
-            # 3. Стоимость упаковки на м3 = Стоимость упаковки паллета / Объем паллета
-            cost_pkg_m3 = pkg['total_pallet_cost_rub'] / pallet_vol if pallet_vol > 0 else 0
-            total_m3 = cost_wool_m3 + cost_pkg_m3
-            cost_t_with_pkg = total_m3 / (rho / 1000) # Стоимость тонны с учетом упаковки
+            cost_wool_m3 = self._calc_wool_cost_m3(cost_t, rho)
+            # Стоимость упаковки на м3 = Стоимость упаковки паллета / Объем паллета
+            cost_pkg_m3 = self._calc_packaging_cost_m3(pkg['total_pallet_cost_rub'], pallet_vol)
+            # С/С 1м3 с упаковкой = Стоимость 1 паллета с упаковкой / Объем 1 паллета
+            wool_pallet_cost = self._calc_wool_pallet_cost_rub(cost_wool_m3, pallet_vol)
+            total_pallet_cost_with_pkg = self._calc_total_pallet_cost_with_packaging_rub(wool_pallet_cost, pkg['total_pallet_cost_rub'])
+            total_m3 = self._calc_total_cost_m3(total_pallet_cost_with_pkg, pallet_vol)
+            cost_t_with_pkg = self._calc_total_cost_t_with_packaging(total_m3, rho)
             
-            pack_weight = pkg['vol_m3'] * rho
-            pallet_weight = pack_weight * pks_pal
+            pack_weight = self._calc_pack_weight_kg(pkg['vol_m3'], rho)
+            pallet_weight = self._calc_pallet_weight_kg(pack_weight, pks_pal)
             
-            truck_weight = pallet_weight * self.config['pallets_per_truck']
-            truck_vol = pallet_vol * self.config['pallets_per_truck']
+            truck_weight = self._calc_truck_weight_kg(pallet_weight)
+            truck_vol = self._calc_truck_volume_m3(pallet_vol)
+            truck_cost = self._calc_truck_cost_rub(total_pallet_cost_with_pkg)
             
             # Расчет реальной высоты паллета (продукта)
-            layers = int(self.config['target_pallet_height_mm'] // pkg['h_pack_mm'])
-            real_pallet_h = layers * pkg['h_pack_mm']
+            real_pallet_h = self._calc_real_pallet_height_mm(pkg['h_pack_mm'])
             
             # Логистические параметры (сколько упаковок/поддонов влезает в 1 тонну веса)
-            packs_per_ton = 1000 / pack_weight if pack_weight > 0 else 0
-            pallets_per_ton = 1000 / pallet_weight if pallet_weight > 0 else 0
+            packs_per_ton = self._calc_units_per_ton(pack_weight)
+            pallets_per_ton = self._calc_units_per_ton(pallet_weight)
 
             data.append({
                 'Плотность кг/м3': rho,
@@ -318,15 +401,17 @@ class MinwoolEngine:
                 'Высота паллета мм': real_pallet_h,
                 'Вес пачки кг': round(pack_weight, 2),
                 'Вес поддона кг': round(pallet_weight, 2),
-                'V паллета м3': round(pallet_vol, 2),
+                'V паллета м3': round(pallet_vol, 4),
                 'Вес фуры кг': round(truck_weight, 2),
-                'V фуры м3': round(truck_vol, 2),
+                'V фуры м3': round(truck_vol, 4),
                 'Упаковок в 1т': round(packs_per_ton, 2),
                 'Поддонов в 1т': round(pallets_per_ton, 2),
-                'С/С упаковки руб/м3': round(cost_pkg_m3, 2),
                 'Упаковка пачки руб': pkg['total_pack_cost_rub'],
                 'Упаковка паллета руб': pkg['total_pallet_cost_rub'],
-                'Цена пачки руб': round(total_m3 * pkg['vol_m3'], 2)
+                'С/С упаковки руб/м3': round(cost_pkg_m3, 2),
+                'Стоимость паллета руб': round(total_pallet_cost_with_pkg, 2),
+                'Стоимость 1 фуры руб': round(truck_cost, 2),
+                'Цена пачки руб': round(self._calc_pack_price_rub(total_m3, pkg['vol_m3']), 2)
             })
         return pd.DataFrame(data)
 
@@ -378,18 +463,24 @@ class MinwoolEngine:
         report.append(f"2. Расход плёнки на пачку (п.м.): (2*{h_pack_mm} + 2*{c['slab_width_mm']}) / 1000 = {perimeter_m:.3f} п.м.")
         report.append(f"   Принято: плёнка шириной {c['film_width_m']} м, стоимость задаётся за погонный метр.")
         report.append(f"3. Стоимость плёнки на пачку: {perimeter_m:.3f} п.м. * {c['film_price_per_lm']} руб/п.м. = {pkg['film_cost_rub']} руб")
-        report.append(f"4. Доля поддона: {c['pallet_price']} руб / {pks_pal} пачек = {c['pallet_price']/pks_pal:.2f} руб")
-        report.append(f"5. Доля худа: {c['hood_price']} руб / {pks_pal} пачек = {c['hood_price']/pks_pal:.2f} руб")
-        report.append(f"6. Доля стрейча: {c['stretch_price_pallet']} руб / {pks_pal} пачек = {c['stretch_price_pallet']/pks_pal:.2f} руб")
-        report.append(f"7. Итого упаковка на 1 пачку (распред.): {pkg['total_pack_cost_rub']} руб")
+        report.append(f"4. Доля худа: {c['hood_price']} руб / {pks_pal} пачек = {c['hood_price']/pks_pal:.2f} руб")
+        report.append(f"5. Доля стрейча: {c['stretch_price_pallet']} руб / {pks_pal} пачек = {c['stretch_price_pallet']/pks_pal:.2f} руб")
+        report.append(f"6. Итого упаковка на 1 пачку (распред.): {pkg['total_pack_cost_rub']} руб")
+        report.append(f"7. Итого упаковка на 1 паллет: ({pkg['film_cost_rub']} * {pks_pal}) + {c['hood_price']} + {c['stretch_price_pallet']} = {pkg['total_pallet_cost_rub']} руб")
         
         report.append("\n=== ЭТАП 3: ПЕРЕСЧЕТ В ОБЪЕМ (м3) ===")
         rho = 50
         cost_wool_m3 = cost_t * rho / 1000
-        cost_pkg_m3 = pkg['total_pack_cost_rub'] / pkg['vol_m3']
-        report.append(f"1. С/С ваты в 1 м3 (при {rho} кг/м3): {cost_t} * {rho} / 1000 = {cost_wool_m3:.2f} руб")
-        report.append(f"2. С/С упаковки в 1 м3: {pkg['total_pack_cost_rub']} руб / {pkg['vol_m3']:.4f} м3 = {cost_pkg_m3:.2f} руб")
-        report.append(f"3. ИТОГО за 1 м3: {cost_wool_m3:.2f} + {cost_pkg_m3:.2f} = {cost_wool_m3 + cost_pkg_m3:.2f} руб")
+        pallet_vol = pkg['vol_m3'] * pks_pal
+        cost_pkg_m3 = pkg['total_pallet_cost_rub'] / pallet_vol if pallet_vol > 0 else 0
+        wool_pallet_cost = cost_wool_m3 * pallet_vol
+        total_pallet_cost_with_pkg = wool_pallet_cost + pkg['total_pallet_cost_rub']
+        total_m3 = total_pallet_cost_with_pkg / pallet_vol if pallet_vol > 0 else 0
+        report.append(f"1. Объем паллета: {pkg['vol_m3']:.4f} * {pks_pal} = {pallet_vol:.4f} м3")
+        report.append(f"2. Стоимость ваты в паллете: {cost_wool_m3:.2f} * {pallet_vol:.4f} = {wool_pallet_cost:.2f} руб")
+        report.append(f"3. Стоимость 1 паллета с упаковкой: {wool_pallet_cost:.2f} + {pkg['total_pallet_cost_rub']} = {total_pallet_cost_with_pkg:.2f} руб")
+        report.append(f"4. С/С 1м3 с упаковкой: {total_pallet_cost_with_pkg:.2f} / {pallet_vol:.4f} = {total_m3:.2f} руб")
+        report.append(f"5. С/С упаковки в 1 м3: {pkg['total_pallet_cost_rub']} / {pallet_vol:.4f} = {cost_pkg_m3:.2f} руб")
         
         report.append("\n* Примечание: Расчеты для других плотностей выполняются аналогично с изменением параметра плотности.")
         

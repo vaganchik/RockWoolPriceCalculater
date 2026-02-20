@@ -38,6 +38,28 @@ class TestMinwoolEngineCalculations(unittest.TestCase):
         self.assertAlmostEqual(row["С/С упаковки руб/м3"], 177.37, places=2)
         self.assertEqual(int(row["Плит в пачке"]), 12)
         self.assertEqual(int(row["Пачек на паллете"]), 16)
+        self.assertAlmostEqual(
+            row["Стоимость 1 фуры руб"],
+            row["Стоимость паллета руб"] * self.engine.config["pallets_per_truck"],
+            delta=0.1,
+        )
+
+    def test_pallet_volume_and_m3_with_packaging_formulas(self):
+        df = self.engine.run()
+        for _, row in df.iterrows():
+            self.assertAlmostEqual(
+                row["V паллета м3"],
+                row["V пачки м3"] * row["Пачек на паллете"],
+                places=4,
+            )
+            total_pallet_cost_with_pkg = (
+                (row["С/С 1т без упаковки"] * row["Плотность кг/м3"] / 1000) * row["V паллета м3"]
+            ) + row["Упаковка паллета руб"]
+            self.assertAlmostEqual(
+                row["С/С 1м3 с упаковкой"],
+                total_pallet_cost_with_pkg / row["V паллета м3"],
+                places=2,
+            )
 
     def test_detailed_report_formula_is_aligned(self):
         report = self.engine.get_detailed_report()
