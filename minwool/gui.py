@@ -51,13 +51,19 @@ class ToolTip:
         self.label.pack()
 
     def update_tip(self, event=None):
-        if self.tip_window:
-            text = self.get_text(event)
-            if not text:
-                self.hide_tip()
-            else:
-                self.label.configure(text=text)
-                self.tip_window.wm_geometry(f"+{event.x_root + 20}+{event.y_root + 10}")
+        text = self.get_text(event)
+        if not text:
+            self.hide_tip()
+            return
+
+        if not self.tip_window:
+            # Для Treeview подсказка может отсутствовать на <Enter> (пустая зона),
+            # поэтому создаем ее на первом валидном <Motion>.
+            self.show_tip(event)
+            return
+
+        self.label.configure(text=text)
+        self.tip_window.wm_geometry(f"+{event.x_root + 20}+{event.y_root + 10}")
 
     def hide_tip(self, event=None):
         if self.tip_window:
